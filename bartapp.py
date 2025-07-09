@@ -1622,6 +1622,9 @@ async def websocket_audio(websocket: WebSocket):
                                 print(f"Station options: {getattr(websocket.state, 'station_options', None)}")
                                 print("======================================\n")
                             else:
+                                # Empty audio was already handled in transcribe_stream function
+                                # which sends an empty_audio notification to the client
+                                logging.info("No transcription text received, continuing to next message")
                                 continue
                         except Exception as e:
                             logging.error(f"Error processing audio buffer: {str(e)}")
@@ -2613,6 +2616,36 @@ class PCMStream(AudioStream):
         for i in range(0, len(self.audio_bytes), self.chunk_size):
             yield self.audio_bytes[i:i + self.chunk_size]
 
+# ======================================TRANSCRIPTION HELPER FUNCTIONS======================================
+def is_empty_transcription(transcribe_result: dict) -> bool:
+    """
+    Detects if a transcription result from AWS Transcribe is empty (no speech detected).
+    
+    Args:
+        transcribe_result: The transcription result from AWS Transcribe
+        
+    Returns:
+        bool: True if the transcription is empty, False otherwise
+    """
+    if not transcribe_result:
+        return True
+        
+    # For direct string results
+    if isinstance(transcribe_result, str):
+        return not transcribe_result.strip()
+        
+    # For AWS Transcribe JSON response format
+    results = transcribe_result.get("Transcript", {}).get("Results", [])
+    if not results:
+        return True
+        
+    for result in results:
+        for alt in result.get("Alternatives", []):
+            if alt.get("Transcript", "").strip():
+                return False
+                
+    return True
+
 # ======================================TRANSCRIPTION FUNCTIONS======================================
 async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", websocket: WebSocket = None) -> str:
     try:
@@ -2661,7 +2694,7 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
         await asyncio.gather(send_audio(), receive_transcript())
         
         result = " ".join(transcripts)
-        if result:
+        if result and result.strip():
             logging.info(f"Transcription complete, received {len(result)} characters")
             
             print("\n========== TRANSCRIPTION RESULT ==========")
@@ -2681,12 +2714,57 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
                 except Exception as ws_error:
                     logging.error(f"Error sending transcription to frontend: {str(ws_error)}")
         else:
-            logging.info("Transcription complete, no text detected")
+            logging.info("Transcription complete, no speech detected")
             
+            # Send empty audio notification to the client
+            if websocket:
+                try:
+                    # First send the notification message
+                    empty_audio_notification = {
+                        'type': 'empty_audio',
+                        'status': 'empty',
+                        'message': 'No speech detected or empty audio',
+                        'timestamp': datetime.utcnow().isoformat()
+                    }
+                    await websocket.send_text(json.dumps(empty_audio_notification, ensure_ascii=False))
+                    logging.info("Sent empty audio notification to frontend")
+                    
+                    # Then generate and send audio response using Polly
+                    language = getattr(websocket.state, 'language', 'en')
+                    empty_audio_messages = {
+                        'en': "I didn't hear anything. Please try speaking again.",
+                        'es': "No escuché nada. Por favor, intenta hablar de nuevo.",
+                        'zh': "我没有听到任何内容。请再次尝试说话。"
+                    }
+                    
+                    message = empty_audio_messages.get(language, empty_audio_messages['en'])
+                    audio_data = synthesize_speech(message, language=language)
+                    
+                    if audio_data:
+                        await websocket.send_bytes(audio_data)
+                        logging.info(f"Sent audio notification for empty audio in {language}")
+                except Exception as ws_error:
+                    logging.error(f"Error sending empty audio notification to frontend: {str(ws_error)}")
+        
         return result
         
     except Exception as e:
         logging.exception(f"Error in transcribe_stream: {str(e)}")
+        
+        # Send error notification to the client
+        if websocket:
+            try:
+                error_notification = {
+                    'type': 'transcription_error',
+                    'status': 'error',
+                    'message': f'Error processing audio: {str(e)}',
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+                await websocket.send_text(json.dumps(error_notification, ensure_ascii=False))
+                logging.info("Sent transcription error notification to frontend")
+            except Exception as ws_error:
+                logging.error(f"Error sending error notification to frontend: {str(ws_error)}")
+                
         return ""
 
 # ======================================UTILITY FUNCTIONS======================================
