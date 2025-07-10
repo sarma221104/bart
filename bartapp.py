@@ -658,20 +658,16 @@ async def call_api_for_query(category: str, params: dict, query_text: str, api_e
         destination_station = None
         
         if websocket:
-            # Use parameters from the current query rather than persisting old values
             if 'orig' in params and params['orig']:
                 origin_station = params['orig']
                 if not getattr(websocket.state, 'awaiting_location', False):
-                    # Only update the state if not in the middle of a location request flow
                     websocket.state.origin_station = origin_station
                     
             if 'dest' in params and params['dest']:
                 destination_station = params['dest']
                 if not getattr(websocket.state, 'awaiting_location', False):
-                    # Only update the state if not in the middle of a location request flow
                     websocket.state.destination_station = destination_station
                     
-            # Only use existing state values if we're in a complete query flow
             if getattr(websocket.state, 'complete_query', False):
                 try:
                     is_complete_query = True
@@ -1584,13 +1580,10 @@ async def websocket_audio(websocket: WebSocket):
                             last_process_time = current_time
                             silence_counter = 0
                             
-                            # Reset key state variables for the new query
                             websocket.state.response_sent = False
                             websocket.state.last_saved_conversation = None
                             websocket.state.skip_current_response = False
                             
-                            # If not in the middle of a disambiguation or location flow,
-                            # reset other state variables to prevent old data persisting
                             if not getattr(websocket.state, 'awaiting_disambiguation', False) and not getattr(websocket.state, 'awaiting_location', False):
                                 websocket.state.complete_query = False
                             
@@ -1622,8 +1615,6 @@ async def websocket_audio(websocket: WebSocket):
                                 print(f"Station options: {getattr(websocket.state, 'station_options', None)}")
                                 print("======================================\n")
                             else:
-                                # Empty audio was already handled in transcribe_stream function
-                                # which sends an empty_audio notification to the client
                                 logging.info("No transcription text received, continuing to next message")
                                 continue
                         except Exception as e:
@@ -1931,9 +1922,8 @@ async def websocket_audio(websocket: WebSocket):
             if not getattr(websocket, "client_state", None) or not websocket.client_state.DISCONNECTED:
                 fallback_audio = synthesize_speech("Sorry, I couldn't process that request. Try asking again.")
                 await websocket.send_bytes(fallback_audio)
-                # Try to close with error code if needed
                 try:
-                    await websocket.close(code=1011)  # 1011 is Internal Server Error
+                    await websocket.close(code=1011) 
                 except RuntimeError as close_err:
                     if "websocket.close" in str(close_err):
                         logging.info("WebSocket already closed")
@@ -2630,11 +2620,9 @@ def is_empty_transcription(transcribe_result: dict) -> bool:
     if not transcribe_result:
         return True
         
-    # For direct string results
     if isinstance(transcribe_result, str):
         return not transcribe_result.strip()
         
-    # For AWS Transcribe JSON response format
     results = transcribe_result.get("Transcript", {}).get("Results", [])
     if not results:
         return True
@@ -2701,7 +2689,6 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
             print(f"Transcribed text: '{result}'")
             print("=========================================\n")
             
-            # Send the transcription result to the frontend immediately
             if websocket:
                 try:
                     transcription_data = {
@@ -2716,10 +2703,8 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
         else:
             logging.info("Transcription complete, no speech detected")
             
-            # Send empty audio notification to the client
             if websocket:
                 try:
-                    # First send the notification message
                     empty_audio_notification = {
                         'type': 'empty_audio',
                         'status': 'empty',
@@ -2729,7 +2714,6 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
                     await websocket.send_text(json.dumps(empty_audio_notification, ensure_ascii=False))
                     logging.info("Sent empty audio notification to frontend")
                     
-                    # Then generate and send audio response using Polly
                     language = getattr(websocket.state, 'language', 'en')
                     empty_audio_messages = {
                         'en': "I didn't hear anything. Please try speaking again.",
@@ -2751,7 +2735,6 @@ async def transcribe_stream(audio_bytes: bytes, language_code: str = "en-US", we
     except Exception as e:
         logging.exception(f"Error in transcribe_stream: {str(e)}")
         
-        # Send error notification to the client
         if websocket:
             try:
                 error_notification = {
@@ -2953,6 +2936,7 @@ def retrieve_knowledge(query: str) -> str:
         error_msg = f"Error processing knowledge base response: {str(e)}"
         logging.error(error_msg)
         return "I'm sorry, I encountered an error while processing the knowledge base response. Please try again with a different query."
+    
 def chunk_text_by_words(text, min_words=6, max_words=8, language="en"):
     """Split text into chunks for speech synthesis, with language-specific handling"""
     
@@ -3184,7 +3168,6 @@ async def stream_response_and_audio(user_query: str, kb_context, websocket: WebS
         }
         await websocket.send_text(json.dumps(error_conversation_data, ensure_ascii=False))
         
-        # Set response_sent flag AFTER sending the response
         websocket.state.response_sent = True
         
         return error_msg
@@ -3406,13 +3389,11 @@ async def generate_combined_response(query: str, kb_context: str, bart_data: dic
         if intent_type == "API":
             if bart_data:
                 if api_has_error or api_no_data:
-                    # When API has error or no data, explicitly tell the model to use KB data
                     kb_context_to_use = "IMPORTANT: This is an API query but the API returned no data or an error. Please inform the user clearly and use the knowledge base data to provide a helpful response if relevant information is available."
                     if error_message:
                         kb_context_to_use += f"\n\nAPI Error/Warning: {error_message}"
                     logging.info("API error or no data. Explicitly directing model to use KB data.")
                 else:
-                    # When API has data, still allow KB data to supplement if needed
                     kb_context_to_use = "IMPORTANT: This is an API query. Use API data as the primary source, but supplement with knowledge base data if API data is incomplete or doesn't fully answer the query."
                     logging.info("API data available. Using as primary source but allowing KB supplementation.")
                 bart_data_to_use = bart_data
@@ -3955,13 +3936,11 @@ def extract_station_names(query_text: str) -> List[str]:
     for station in STATION_DATA["stations"]:
         station_name_lower = station["name"].lower()
         
-        # Check for exact station name match (case insensitive)
         if query_lower == station_name_lower:
             exact_matches.append(station["name"])
             exact_station_match = True
             print(f"Found exact station name match: '{station['name']}'")
             
-        # Also check if the query is exactly the station name (accounting for punctuation)
         clean_station_name = re.sub(r'[^\w\s]', '', station["name"]).strip()
         clean_station_lower = clean_station_name.lower()
         clean_query = re.sub(r'[^\w\s]', '', query_lower).strip()
@@ -3971,8 +3950,6 @@ def extract_station_names(query_text: str) -> List[str]:
             exact_station_match = True
             print(f"Found exact station name match (clean): '{station['name']}'")
     
-    # If we found an exact full station name match, return only those matches
-    # This prevents partial matches from being returned when we have an exact match
     if exact_station_match:
         unique_matches = []
         for match in exact_matches:
@@ -3981,9 +3958,8 @@ def extract_station_names(query_text: str) -> List[str]:
         
         print(f"Extracted station candidates from '{query_text}' (exact station match): {unique_matches}")
         return sorted(unique_matches, key=len, reverse=True)
-    
-    # If no exact full station name match, continue with normal matching process
-    # 1. Collect additional exact station name and abbreviation matches
+   
+    # 2. Collect additional exact station name and abbreviation matches
     for station in STATION_DATA["stations"]:
         abbr_lower = station["abbr"].lower()
         if re.search(r'\b' + re.escape(abbr_lower) + r'\b', query_lower):
@@ -4015,12 +3991,12 @@ def extract_station_names(query_text: str) -> List[str]:
                     station_part_mapping[part] = station["name"]
                     break
 
-    # 2. Collect possible ambiguous/group keyword matches *in addition* to exact matches
+    # 3. Collect possible ambiguous/group keyword matches *in addition* to exact matches
     for group_key in STATION_GROUPS.keys():
         if group_key.lower() in query_lower:
             potential_matches.append(group_key)
 
-    # 3. Collect partial station name matches (first 1-2 words of a station name) - with special handling for multi-part names
+    # 4. Collect partial station name matches (first 1-2 words of a station name) - with special handling for multi-part names
     for station in STATION_DATA["stations"]:
         station_parts = station["name"].split()
         
@@ -4041,7 +4017,7 @@ def extract_station_names(query_text: str) -> List[str]:
                     station_part_mapping[slash_part.lower()] = station["name"]
                     break
 
-    # 4. Handle shortened station names like "rich" for "Richmond"
+    # 5. Handle shortened station names like "rich" for "Richmond"
     if len(exact_matches) == 0 and len(potential_matches) == 0:
         for word in words:
             if len(word) >= 3:  
@@ -4055,7 +4031,7 @@ def extract_station_names(query_text: str) -> List[str]:
                             station_part_mapping[word] = station_name
                             break
 
-    # 5. Handle very short queries that might be direct station name responses
+    # 6. Handle very short queries that might be direct station name responses
     if len(exact_matches) == 0 and len(abbr_matches) == 0 and len(potential_matches) == 0 and len(query_text.split()) <= 3:
         for station in STATION_DATA["stations"]:
             for part in station["name"].split():
@@ -4088,12 +4064,9 @@ def extract_station_names(query_text: str) -> List[str]:
         if not is_duplicate:
             unique_matches.append(match)
             
-    # Log the raw extracted candidates for debugging
     raw_candidates = unique_matches.copy()
     print(f"Raw extracted station candidates: {raw_candidates}")
 
-    # If we have multiple candidates but one is an exact match for the query,
-    # only return the exact match
     if len(unique_matches) > 1:
         exact_query_matches = []
         for match in unique_matches:
@@ -4151,7 +4124,6 @@ async def process_location_query(location_response: str, destination: str, webso
                 if audio_data:
                     await websocket.send_bytes(audio_data)
                 
-                # Don't send plain text message, only send the JSON formatted message
                 temp_id = f"disambiguation_{uuid.uuid4()}"
                 conversation_data = {
                     "type": "conversation",
@@ -4173,7 +4145,6 @@ async def process_location_query(location_response: str, destination: str, webso
                 reconstructed_query = f"next train from {origin_station} to {destination}"
                 print(f"Reconstructed query: '{reconstructed_query}'")
                 
-                # Store the final reconstructed query to be used for saving the conversation
                 websocket.state.final_query = reconstructed_query
                 
                 websocket.state.awaiting_location = False
@@ -4200,7 +4171,6 @@ async def process_location_query(location_response: str, destination: str, webso
         if audio_data:
             await websocket.send_bytes(audio_data)
         
-        # Don't send plain text message, send formatted JSON instead
         temp_id = f"location_retry_{uuid.uuid4()}"
         conversation_data = {
             "type": "conversation",
@@ -4232,7 +4202,6 @@ async def process_location_query(location_response: str, destination: str, webso
         audio_data = synthesize_speech(message, language=lang)
         if audio_data:
             await websocket.send_bytes(audio_data)
-        # await websocket.send_text(message)
         
         websocket.state.awaiting_location = False
         websocket.state.destination_station = None
@@ -4242,7 +4211,6 @@ async def process_location_query(location_response: str, destination: str, webso
 async def process_station_disambiguation(user_response: str, options: List[str], websocket: WebSocket) -> Optional[str]:
     """Process user response to station disambiguation and return the selected station"""
     try:
-        # First, preprocess the user response to handle concatenated station names
         preprocessed_response = preprocess_concatenated_stations(user_response)
         user_response_lower = preprocessed_response.lower().strip()
         
@@ -4345,10 +4313,8 @@ async def process_query_with_disambiguation(query_text: str, websocket: WebSocke
     """Process user query with station disambiguation if needed"""
     import re
     
-    # Preprocess the query to handle concatenated station names at the very beginning
     preprocessed_query = preprocess_concatenated_stations(query_text)
     
-    # Use the preprocessed query for all subsequent processing
     query_text = preprocessed_query
     
     is_awaiting_disambiguation = getattr(websocket.state, 'awaiting_disambiguation', False)
@@ -4524,7 +4490,6 @@ async def process_query_with_disambiguation(query_text: str, websocket: WebSocke
             if audio_data:
                 await websocket.send_bytes(audio_data)
             
-                # Don't send plain text message, only send the formatted JSON
                 temp_id = f"disambiguation_{uuid.uuid4()}"
                 conversation_data = {
                     "type": "conversation",
@@ -4541,7 +4506,6 @@ async def process_query_with_disambiguation(query_text: str, websocket: WebSocke
                 }
                 await websocket.send_text(json.dumps(conversation_data))
                 
-                # Mark that we've sent a response for this query
                 websocket.state.response_sent = True
                 websocket.state.last_saved_conversation = query_text
 
@@ -4633,7 +4597,6 @@ async def process_query_with_disambiguation(query_text: str, websocket: WebSocke
                 if audio_data:
                     await websocket.send_bytes(audio_data)
                     
-                # Don't send plain text message, only send the formatted JSON
                 temp_id = f"location_request_{uuid.uuid4()}"
                 conversation_data = {
                     "type": "conversation",
@@ -4646,7 +4609,6 @@ async def process_query_with_disambiguation(query_text: str, websocket: WebSocke
                 }
                 await websocket.send_text(json.dumps(conversation_data))
                 
-                # Mark that we've sent a response for this query
                 websocket.state.response_sent = True
                 websocket.state.last_saved_conversation = query_text
                 return location_request
@@ -4671,15 +4633,11 @@ async def save_and_send_response(websocket: WebSocket, user_id: str, query: str,
     final_query = getattr(websocket.state, 'final_query', None)
     is_location_flow = bool(final_query)
     
-    # If this is part of a location flow, we might have a final reconstructed query
-    # That contains both origin and destination. Use that instead of the original query.
     if final_query:
         logging.info(f"Using final reconstructed query '{final_query}' instead of '{query}'")
         query = final_query
-        # Clear the final query to avoid reusing it for future conversations
         websocket.state.final_query = None
     
-    # Check if we're already awaiting for a location or disambiguation
     if getattr(websocket.state, 'awaiting_location', False) or getattr(websocket.state, 'awaiting_disambiguation', False):
         logging.info(f"Skipping save_and_send_response for query '{query}' - already sent as location/disambiguation request")
         websocket.state.response_sent = True
@@ -4687,7 +4645,6 @@ async def save_and_send_response(websocket: WebSocket, user_id: str, query: str,
         
     if last_saved is not None and (last_saved == query or query in last_saved or last_saved in query):
         logging.info(f"Conversation for query '{query}' has already been saved - skipping save")
-        # We don't need to send the response again for any reason - it's already been handled
         websocket.state.response_sent = True
         return
         
@@ -4737,16 +4694,10 @@ async def save_and_send_response(websocket: WebSocket, user_id: str, query: str,
     
     save_query = replacement_info['final'] if replacement_info else query
     
-    # Mark this query as handled to prevent duplicate processing
     websocket.state.last_saved_conversation = query
     
-    # ONLY save the query to database if:
-    # 1. It's a final query with both origin and destination (from a location flow)
-    # 2. OR it contains both origin and destination in a single query
-    # 3. AND we're not in the middle of a disambiguation or location flow
     should_save_to_db = False
     
-    # Check if this is a complete query with both origin and destination
     has_origin_dest = ('from ' in save_query.lower() and 'to ' in save_query.lower()) or is_location_flow
     
     if has_origin_dest and not getattr(websocket.state, 'awaiting_location', False) and not getattr(websocket.state, 'awaiting_disambiguation', False):
@@ -4767,23 +4718,18 @@ async def save_and_send_response(websocket: WebSocket, user_id: str, query: str,
             ))
             
             conversation_id = await save_task
-            # Removing duplicate logging that's already done in save_conversation
             
             if conversation_id:
                 conversation_data['conversation_id'] = conversation_id
         except Exception as e:
             logging.error(f"Error saving conversation to database: {str(e)}")
     
-    # Always send the response to the client
     await websocket.send_text(json.dumps(conversation_data, ensure_ascii=False))
     websocket.state.response_sent = True
     
-    # Reset state variables after completing a query
     if not getattr(websocket.state, 'awaiting_disambiguation', False) and not getattr(websocket.state, 'awaiting_location', False):
-        # Only reset if we're not in the middle of a multi-step flow
         websocket.state.complete_query = False
         
-        # Don't reset origin/destination if they were just set in this query
         if 'orig' not in query.lower() and 'from ' not in query.lower():
             websocket.state.origin_station = None
             
@@ -5080,14 +5026,78 @@ def normalize_time_format(time_str: str) -> Optional[str]:
         time_str = time_str.replace(' pm', 'pm')
     
     try:
+        time_obj = None
+        
         if 'am' in time_str or 'pm' in time_str:
-            time_obj = datetime.strptime(time_str, '%I:%M%p')
+            formats = [
+                '%I:%M%p',  
+                '%I%M%p',   
+                '%I%p'      
+            ]
+            
+            for fmt in formats:
+                try:
+                    time_obj = datetime.strptime(time_str, fmt)
+                    break
+                except ValueError:
+                    continue
+                    
         else:
-            time_obj = datetime.strptime(time_str, '%H:%M')
+            formats = [
+                '%H:%M',    
+                '%H%M',     
+                '%H'        
+            ]
+            
+            for fmt in formats:
+                try:
+                    time_obj = datetime.strptime(time_str, fmt)
+                    break
+                except ValueError:
+                    continue
+        
+        if time_obj is None:
+            raise ValueError(f"Could not parse time: {time_str}")
             
         return time_obj.strftime('%-I:%M%p').lower()
-    except ValueError:
-        logging.error(f"Error normalizing time format: {time_str}")
+    except Exception as e:
+        logging.error(f"Error normalizing time format: {time_str} - {e}")
+        
+        try:
+            if re.match(r'^\d{1,2}(am|pm)$', time_str):
+                hour = re.match(r'^(\d{1,2})(am|pm)$', time_str)
+                if hour:
+                    hour_val = int(hour.group(1))
+                    period = hour.group(2)
+                    if 1 <= hour_val <= 12:
+                        return f"{hour_val}:00{period}"
+            
+            if re.match(r'^\d{3,4}$', time_str):
+                if len(time_str) == 3:  
+                    hour = time_str[0]
+                    minute = time_str[1:3]
+                    hour_val = int(hour)
+                    if 0 <= hour_val <= 9 and 0 <= int(minute) <= 59:
+                        period = "am" if hour_val < 12 else "pm"
+                        if hour_val == 0:
+                            hour_val = 12
+                        if hour_val > 12:
+                            hour_val -= 12
+                        return f"{hour_val}:{minute}{period}"
+                elif len(time_str) == 4:  
+                    hour = time_str[0:2]
+                    minute = time_str[2:4]
+                    hour_val = int(hour)
+                    if 0 <= hour_val <= 23 and 0 <= int(minute) <= 59:
+                        period = "am" if hour_val < 12 else "pm"
+                        if hour_val == 0:
+                            hour_val = 12
+                        if hour_val > 12:
+                            hour_val -= 12
+                        return f"{hour_val}:{minute}{period}"
+        except Exception:
+            pass
+            
         return None
 
 def validate_stations(station_names: List[str]) -> Dict[str, Any]:
@@ -5448,75 +5458,60 @@ def preprocess_concatenated_stations(query_text: str) -> str:
     import re
     from difflib import SequenceMatcher
     
-    # Create a list of all possible station names and group names
     all_station_names = []
     valid_station_names = {}
     
-    # Add all station names to our reference lists
     for station in STATION_DATA["stations"]:
         station_name = station["name"]
         all_station_names.append(station_name)
         valid_station_names[station_name.lower()] = station_name
     
-    # Add all station group names
     for group_name in STATION_GROUPS.keys():
         all_station_names.append(group_name)
         valid_station_names[group_name.lower()] = group_name
     
-    # Create concatenated versions mapping to properly spaced versions
     concatenated_mapping = {}
     
     for station_name in all_station_names:
         if ' ' in station_name or '/' in station_name or '.' in station_name:
-            # Remove spaces, slashes, periods, and other special characters to create concatenated version
             concatenated = re.sub(r'[^a-zA-Z0-9]', '', station_name.lower())
             
-            # Only add if the concatenated version is significantly different (has spaces/special chars)
             if concatenated != station_name.lower().replace(' ', ''):
                 concatenated_mapping[concatenated] = station_name
             
-            # Also handle the version with just spaces removed
             space_removed = station_name.lower().replace(' ', '')
             if space_removed != station_name.lower() and space_removed not in concatenated_mapping:
                 concatenated_mapping[space_removed] = station_name
     
-    # Sort by length (longest first) to handle overlapping matches correctly
     sorted_concatenated = sorted(concatenated_mapping.keys(), key=len, reverse=True)
     
-    # First pass: handle concatenated station names
     processed_query = query_text
     query_lower = query_text.lower()
     
-    # Keep track of replacements made to avoid overlapping replacements
     replacements_made = []
     
     for concatenated in sorted_concatenated:
         if concatenated in query_lower:
-            # Find the exact position in the original query (case-insensitive)
             pattern = re.compile(re.escape(concatenated), re.IGNORECASE)
             matches = list(pattern.finditer(query_lower))
             
-            for match in reversed(matches):  # Process from right to left to maintain positions
+            for match in reversed(matches):  
                 start, end = match.span()
                 
-                # Check if this position overlaps with any previous replacement
                 overlaps = any(
                     (start < prev_end and end > prev_start) 
                     for prev_start, prev_end in replacements_made
                 )
                 
                 if not overlaps:
-                    # Replace in the original query maintaining case
                     original_text = processed_query[start:end]
                     replacement = concatenated_mapping[concatenated]
                     
-                    # Preserve the case of the first letter if it was capitalized
                     if original_text and original_text[0].isupper():
                         replacement = replacement.capitalize()
                     
                     processed_query = processed_query[:start] + replacement + processed_query[end:]
                     
-                    # Update positions for future replacements
                     length_diff = len(replacement) - len(original_text)
                     replacements_made = [
                         (pos_start + (length_diff if pos_start >= start else 0), 
@@ -5527,80 +5522,59 @@ def preprocess_concatenated_stations(query_text: str) -> str:
                     
                     print(f"Preprocessed concatenated station: '{original_text}' -> '{replacement}'")
                     
-                    # Update query_lower for subsequent searches
                     query_lower = processed_query.lower()
     
-    # Second pass: autocorrect misspelled station names while preserving query structure
-    # We only want to correct words that are likely station names, not prepositions or other words
     
-    # Only extract words that might be station names (minimum 4 characters)
-    # This means we don't try to match prepositions like "to", "at", etc.
-    # Find terms that might be station names, preserving their position in the string
     tokens = []
     
-    # Use regex to find words, preserving their positions in the original string
     for match in re.finditer(r'\b\w{4,}\b', processed_query, re.IGNORECASE):
         start, end = match.span()
         word = processed_query[start:end]
         tokens.append((word, start, end))
     
-    # Also look for potential multi-word station names (still preserving positions)
     words = [t[0] for t in tokens]
     for i in range(len(tokens)-1):
         if i < len(tokens)-1:
             word1, start1, _ = tokens[i]
             word2, _, end2 = tokens[i+1]
-            # Make sure they're adjacent by checking the text between them
             between_text = processed_query[tokens[i][2]:tokens[i+1][1]].strip()
             if between_text == "" or between_text == " ":
-                # They're adjacent
                 combined = f"{word1} {word2}"
                 tokens.append((combined, start1, end2))
     
-    # If we have enough tokens, also try to find triple-word combinations
     if len(tokens) >= 3:
         for i in range(len(tokens)-2):
             word1, start1, _ = tokens[i]
             word2, _, _ = tokens[i+1]
             word3, _, end3 = tokens[i+2]
-            # Check if they're consecutive by looking at their positions
             if processed_query[tokens[i][2]:tokens[i+1][1]].strip() in ["", " "] and \
                processed_query[tokens[i+1][2]:tokens[i+2][1]].strip() in ["", " "]:
                 combined = f"{word1} {word2} {word3}"
                 tokens.append((combined, start1, end3))
     
-    # Threshold for fuzzy matching (0.75 means 75% similarity required)
     SIMILARITY_THRESHOLD = 0.75
     
-    # Process tokens from longest to shortest to avoid substring conflicts
     tokens.sort(key=lambda x: len(x[0]), reverse=True)
     
-    # Track replacements to avoid overlap
     new_replacements = []
     
-    # First, check if any full station name is already in the query (to avoid duplication)
-    # Find all valid station names that appear in the query
     existing_stations = []
     for valid_name_lower, valid_name in valid_station_names.items():
         station_pos = processed_query.lower().find(valid_name_lower)
         if station_pos >= 0:
             existing_stations.append((valid_name, station_pos, station_pos + len(valid_name_lower)))
     
-    # Process tokens
     for token, start, end in tokens:
         token_lower = token.lower()
         
-        # Skip if it's already a valid station name
         if token_lower in valid_station_names:
             continue
         
-        # Skip if this position overlaps with any previous replacement
         overlaps = any(
             (start < prev_end and end > prev_start) 
             for prev_start, prev_end in new_replacements
         )
         
-        # Also skip if this position overlaps with an existing full station name
         for _, station_start, station_end in existing_stations:
             if (start < station_end and end > station_start):
                 overlaps = True
@@ -5612,11 +5586,8 @@ def preprocess_concatenated_stations(query_text: str) -> str:
         best_match = None
         best_score = 0
         
-        # Check if this token is already part of a larger station name in the query
-        # If so, skip it to prevent duplication like "San San Francisco"
         is_part_of_station = False
         for valid_name_lower, _ in valid_station_names.items():
-            # Check if this token's position overlaps with the position of a valid station name
             station_pos = processed_query.lower().find(valid_name_lower)
             if station_pos >= 0 and start >= station_pos and end <= station_pos + len(valid_name_lower):
                 is_part_of_station = True
@@ -5625,9 +5596,7 @@ def preprocess_concatenated_stations(query_text: str) -> str:
         if is_part_of_station:
             continue
             
-        # Find the closest match among valid station names
         for valid_name_lower, valid_name in valid_station_names.items():
-            # Check if the valid name contains the potential name (for partial matches)
             if token_lower in valid_name_lower:
                 score = len(token_lower) / len(valid_name_lower)
                 if score > best_score and score > SIMILARITY_THRESHOLD:
@@ -5635,24 +5604,19 @@ def preprocess_concatenated_stations(query_text: str) -> str:
                     best_match = valid_name
                 continue
                 
-            # Use fuzzy string matching for everything else
             score = SequenceMatcher(None, token_lower, valid_name_lower).ratio()
             if score > best_score and score > SIMILARITY_THRESHOLD:
                 best_score = score
                 best_match = valid_name
         
-        # If we found a good match, replace it in the query
         if best_match:
-            # Preserve original capitalization
             if token and token[0].isupper():
                 corrected = best_match[0].upper() + best_match[1:]
             else:
                 corrected = best_match
                 
-            # Replace only this specific occurrence at the correct position
             processed_query = processed_query[:start] + corrected + processed_query[end:]
             
-            # Update positions for future replacements (adjust positions after this replacement)
             length_diff = len(corrected) - len(token)
             tokens = [
                 (w, 
@@ -5661,7 +5625,6 @@ def preprocess_concatenated_stations(query_text: str) -> str:
                 for w, s, e in tokens
             ]
             
-            # Update our tracking of replacements
             new_replacements.append((start, start + len(corrected)))
             
             print(f"Autocorrected station name: '{token}' -> '{corrected}' (similarity: {best_score:.2f})")
